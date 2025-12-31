@@ -32,6 +32,8 @@
 # 10. 촬영모드 표시 추가 
 #
 # 11. 사진에 흰색으로 틀(액자) 만드는 기능 추가
+#
+# 12. Web으로 확인 https://photoviewergit-appa9g5t3s89erj8wrvurbu.streamlit.app/
 #####################################################################
 
 ##
@@ -149,7 +151,7 @@ def main():
     st.markdown("""<style>th, td { text-align: left !important; }</style>""", unsafe_allow_html=True)
 
     # 타이틀 변경
-    st.title("📷 사진 정보 누적 뷰어 (액자 추가)")
+    st.title("📷 사진 정보 뷰어 (액자제공)")
 
     if 'history' not in st.session_state:
         st.session_state['history'] = []
