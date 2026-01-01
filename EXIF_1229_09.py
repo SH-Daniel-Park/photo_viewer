@@ -33,19 +33,23 @@
 #
 # 11. 사진에 흰색으로 틀(액자) 만드는 기능 추가
 #
-# 12. Web으로 확인 https://photoviewergit-appa9g5t3s89erj8wrvurbu.streamlit.app/
+# 12. Web으로 확인
+#      https://photo-viewer-kentlee.streamlit.app/
+#        https://bit.ly/Photo_View_KL
+#
+# 13. 노출보정정보도 표시
 #####################################################################
 
 ##
 
 import streamlit as st
 import pandas as pd
-from PIL import Image, ImageOps # ImageOps 추가
+from PIL import Image, ImageOps 
 from PIL.ExifTags import TAGS
 import sys
 import os
 from streamlit.web import cli as stcli
-import math # 픽셀 계산을 위한 수학 모듈 추가
+import math 
 
 # --- [설정] 분석할 태그 및 한글 명칭 ---
 TARGET_TAGS = {
@@ -57,6 +61,7 @@ TARGET_TAGS = {
     "ExposureTime": "셔터 스피드",
     "ISOSpeedRatings": "ISO 감도",
     "FNumber": "조리개 값",
+    "ExposureBiasValue": "노출 보정", # <<< [추가됨] 노출 보정 항목
     "FocalLength": "초점 거리",
     "LensModel": "렌즈 모델명"
 }
@@ -64,6 +69,7 @@ TARGET_TAGS = {
 # --- [함수] 값 포맷팅 (보기 좋게 변환) ---
 def format_value(tag_name, value):
     try:
+        # 1. 촬영 모드 변환
         if tag_name == "ExposureProgram":
             mode_map = {
                 0: "알 수 없음", 1: "매뉴얼 모드 (M)", 2: "프로그램 모드 (P)",
@@ -72,6 +78,7 @@ def format_value(tag_name, value):
             }
             return mode_map.get(int(value), f"기타 ({value})")
 
+        # 2. 셔터 스피드 (분수 변환)
         if tag_name == "ExposureTime":
             val = float(value)
             if val >= 1.0:
@@ -80,6 +87,7 @@ def format_value(tag_name, value):
                 denom = int(round(1 / val))
                 return f"1/{denom}s"
 
+        # 3. 초점 거리 (mm 추가)
         if tag_name == "FocalLength":
             if isinstance(value, (tuple, list)) and len(value) >= 2 and value[1] != 0:
                 fl_val = value[0] / value[1]
@@ -89,12 +97,22 @@ def format_value(tag_name, value):
             if fl_val.is_integer(): fl_val = int(fl_val)
             return f"{fl_val}mm"
 
+        # 4. 조리개 (F값)
         if tag_name == "FNumber":
             return f"f/{round(float(value), 1)}"
 
+        # 5. ISO
         if tag_name == "ISOSpeedRatings":
              val = value[0] if isinstance(value, (list, tuple)) else value
              return f"ISO {val}"
+
+        # 6. [추가됨] 노출 보정 (eV 단위 및 부호 표시)
+        if tag_name == "ExposureBiasValue":
+            val = float(value)
+            if val == 0:
+                return "0 eV"
+            # + 부호를 강제로 붙여서 표시 (예: +0.3 eV, -0.7 eV)
+            return f"{val:+.1f} eV"
 
     except Exception:
         return value
@@ -127,22 +145,11 @@ def get_detailed_exif(image):
             result_dict[kor_name] = format_value(eng_key, all_exif[eng_key])
     return result_dict
 
-# --- [신규 함수] 흰색 테두리(액자) 추가 ---
+# --- [함수] 흰색 테두리(액자) 추가 ---
 def add_white_border(image, border_width_mm=1.0):
-    """
-    이미지 해상도(DPI)를 기반으로 지정된 mm 두께의 흰색 테두리를 추가합니다.
-    """
-    # 1. 이미지의 DPI(Dots Per Inch) 정보를 가져옵니다.
-    # 정보가 없으면 웹 기본값인 96 DPI를 사용합니다.
     dpi = image.info.get('dpi', (96, 96))[0]
-
-    # 2. 1mm에 해당하는 픽셀 수를 계산합니다. (1 inch = 25.4 mm)
-    # 계산된 픽셀 수는 정수여야 하므로 올림(ceil) 처리합니다.
     border_px = math.ceil(dpi / 25.4 * border_width_mm)
-
-    # 3. 이미지 주변에 흰색(white) 테두리를 확장(expand)합니다.
     bordered_image = ImageOps.expand(image, border=border_px, fill='white')
-
     return bordered_image
 
 # --- [메인 화면 구성 함수] ---
@@ -151,7 +158,7 @@ def main():
     st.markdown("""<style>th, td { text-align: left !important; }</style>""", unsafe_allow_html=True)
 
     # 타이틀 변경
-    st.title("📷 사진 정보 뷰어 (액자제공)")
+    st.title("📷 사진 정보 뷰어 (노출보정 추가)")
 
     if 'history' not in st.session_state:
         st.session_state['history'] = []
@@ -173,16 +180,10 @@ def main():
             is_duplicate = any(item['name'] == uploaded_file.name for item in st.session_state['history'])
             if not is_duplicate:
                 try:
-                    # 1. 원본 이미지 열기
                     original_image = Image.open(uploaded_file)
-                    
-                    # 2. EXIF 정보는 '원본' 이미지에서 추출 (정확성 위해)
                     exif_info = get_detailed_exif(original_image)
-
-                    # 3. [핵심] 화면 표시용 이미지에 1mm 흰색 테두리 추가
                     bordered_image = add_white_border(original_image, border_width_mm=1.0)
 
-                    # 4. 히스토리에는 '테두리가 추가된 이미지'를 저장
                     st.session_state['history'].append({
                         'name': uploaded_file.name,
                         'image': bordered_image, 
@@ -198,7 +199,6 @@ def main():
             st.markdown(f"### 🖼️ {item['name']}")
             col1, col2 = st.columns([1, 1])
             with col1:
-                # 테두리가 추가된 이미지가 표시됩니다.
                 st.image(item['image'], use_container_width=True)
             with col2:
                 if item['exif']:
