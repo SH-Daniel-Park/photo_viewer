@@ -67,7 +67,38 @@ TARGET_TAGS = {
 # --- [함수] 값 포맷팅 (보기 좋게 변환) ---
 def format_value(tag_name, value):
     try:
-        # 1. 촬영 모드 변환
+        # [핵심 수정 1] 값이 아예 없거나(None), 빈 문자열이면 "-" 반환
+        if value is None or value == "":
+            return "-"
+
+        # 1. 조리개 (F값)
+        if tag_name == "FNumber":
+            float_val = float(value)
+            # 0.0이면 정보 없음으로 간주하고 "-" 처리
+            if float_val == 0: 
+                return "-"     
+            return f"f/{round(float_val, 1)}"
+
+        # 2. 초점 거리
+        if tag_name == "FocalLength":
+            # 튜플/리스트 형태 처리
+            if isinstance(value, (tuple, list)):
+                if len(value) >= 2 and value[1] != 0:
+                    fl_val = value[0] / value[1]
+                else:
+                    return "-"
+            else:
+                fl_val = float(value)
+            
+            # 0이면 정보 없음으로 간주
+            if fl_val == 0:
+                return "-"
+                
+            fl_val = round(fl_val, 1)
+            if fl_val.is_integer(): fl_val = int(fl_val)
+            return f"{fl_val}mm"
+
+        # 3. 촬영 모드 변환
         if tag_name == "ExposureProgram":
             mode_map = {
                 0: "알 수 없음", 1: "매뉴얼 모드 (M)", 2: "프로그램 모드 (P)",
@@ -76,30 +107,16 @@ def format_value(tag_name, value):
             }
             return mode_map.get(int(value), f"기타 ({value})")
 
-        # 2. 셔터 스피드 (장노출 시간 처리)
+        # 4. 셔터 스피드
         if tag_name == "ExposureTime":
             val = float(value)
+            if val == 0: return "-"
+            
             if val >= 1.0:
-                # 1초 이상인 경우 (예: 30s) 정수/실수 구분하여 초 단위 표시
                 return f"{int(val)}s" if val.is_integer() else f"{val}s"
             else:
-                # 1초 미만인 경우 (예: 1/60s) 분수 형태로 변환
                 denom = int(round(1 / val))
                 return f"1/{denom}s"
-
-        # 3. 초점 거리 (mm 추가)
-        if tag_name == "FocalLength":
-            if isinstance(value, (tuple, list)) and len(value) >= 2 and value[1] != 0:
-                fl_val = value[0] / value[1]
-            else:
-                fl_val = float(value)
-            fl_val = round(fl_val, 1)
-            if fl_val.is_integer(): fl_val = int(fl_val)
-            return f"{fl_val}mm"
-
-        # 4. 조리개 (F값)
-        if tag_name == "FNumber":
-            return f"f/{round(float(value), 1)}"
 
         # 5. ISO
         if tag_name == "ISOSpeedRatings":
@@ -114,7 +131,7 @@ def format_value(tag_name, value):
             return f"{val:+.1f} eV"
 
     except Exception:
-        return value
+        return "-" # 계산 중 에러가 나도 "-"로 표시
     return value
 
 # --- [함수] EXIF 정보 추출 ---
@@ -144,19 +161,22 @@ def get_detailed_exif(image, file_size_bytes=0):
     for eng_key, kor_name in TARGET_TAGS.items():
         if eng_key in ["DateTime", "DateTimeOriginal"]: continue
         
-        # [해상도] 실제 이미지 크기 (가로 x 세로)
+        # [해상도]
         if eng_key == "Resolution":
             result_dict[kor_name] = f"{image.width} x {image.height}"
             continue
 
-        # [파일 크기] KB 단위, 소수점 1자리
+        # [파일 크기]
         if eng_key == "FileSize":
             kb_size = file_size_bytes / 1024
             result_dict[kor_name] = f"{kb_size:.1f} KB"
             continue
 
-        if eng_key in all_exif:
-            result_dict[kor_name] = format_value(eng_key, all_exif[eng_key])
+        # [핵심 수정 2] 정보가 있는지(if eng_key in all_exif) 확인하지 않고
+        # 무조건 값을 가져오되, 없으면 None을 넘깁니다.
+        # format_value 함수가 None을 받으면 "-"를 리턴하므로 표에는 "-"가 표시됩니다.
+        val = all_exif.get(eng_key) 
+        result_dict[kor_name] = format_value(eng_key, val)
             
     return result_dict
 
@@ -219,7 +239,6 @@ def main():
                 st.image(item['image'], use_container_width=True)
             with col2:
                 if item['exif']:
-                    # 기본 DataFrame 테이블 사용 (로고 없음, 텍스트 출력)
                     df = pd.DataFrame(list(item['exif'].items()), columns=["항목", "정보"])
                     st.table(df)
                 else:
