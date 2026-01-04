@@ -1,7 +1,7 @@
 # 사전
-# pip install pandas
+# pip install streamlit pandas
 #  실행
-# streamlit run EXIF_1229_08.py
+# streamlit run EXIF_1229_11.py
 #######################################################################
 #1. st.session_state['history'] 사용:
 #     Streamlit은 원래 위젯을 건드리면 전체 코드가 다시 실행되면서 변수가 초기화됩니다.
@@ -17,31 +17,26 @@
 #
 # 5.기록 지우기 버튼:
 #       사진이 너무 많이 쌓이면 지저분해지므로, 사이드바에 "모든 기록 지우기" 버튼을 두어 history를 비울 수 있게 했습니다.
-#
 #6. round(1 / val): 
 #     입력된 소수(float) 값의 역수를 취한 뒤 반올림합니다.
 #     예: 0.016666667 (1/60초) → 1 / 0.016666667 = 59.9999... → 60
-#
 # 7.  int(...): 소수점을 떼고 정수로 만듭니다.
-#
 #8.  f"1/{denom}s": 최종적으로 1/60s 형태로 문자열을 만듭니다.
 #       이제 0.1은 1/10s로, 0.004는 1/250s로 우리가 흔히 아는 방식으로 깔끔하게 표시됩니다.
-#
 #9. 동시에 여러장의 사진을 Drag and Drop했을경우에도 처리하는 코드로 수정
-#
 # 10. 촬영모드 표시 추가 
-#
 # 11. 사진에 흰색으로 틀(액자) 만드는 기능 추가
-#
 # 12. Web으로 확인
 #      https://photo-viewer-kentlee.streamlit.app/
 #        https://bit.ly/Photo_View_KL
-#
 # 13. 노출보정정보도 표시
+# 14. Image 크기 정보 추가
+# 15. 해상도 정보 추가
+# 16. 파일 사이즈 추가
+# 17. 장노출시간 추가
 #####################################################################
 
 ##
-
 import streamlit as st
 import pandas as pd
 from PIL import Image, ImageOps 
@@ -52,16 +47,19 @@ from streamlit.web import cli as stcli
 import math 
 
 # --- [설정] 분석할 태그 및 한글 명칭 ---
+# 순서: 조리개 값 -> 해상도 -> 파일 크기 -> 노출 보정
 TARGET_TAGS = {
     "Make": "카메라 제조사",
     "Model": "카메라 모델명",
     "DateTimeOriginal": "촬영 일시",
     "DateTime": "촬영 일시",
     "ExposureProgram": "촬영 모드",
-    "ExposureTime": "셔터 스피드",
+    "ExposureTime": "셔터 스피드", # (장노출 시간 포함)
     "ISOSpeedRatings": "ISO 감도",
     "FNumber": "조리개 값",
-    "ExposureBiasValue": "노출 보정", # <<< [추가됨] 노출 보정 항목
+    "Resolution": "해상도",       # 가로 X 세로 (픽셀)
+    "FileSize": "파일 크기",      # KB 단위 (소수점 1자리)
+    "ExposureBiasValue": "노출 보정",
     "FocalLength": "초점 거리",
     "LensModel": "렌즈 모델명"
 }
@@ -78,12 +76,14 @@ def format_value(tag_name, value):
             }
             return mode_map.get(int(value), f"기타 ({value})")
 
-        # 2. 셔터 스피드 (분수 변환)
+        # 2. 셔터 스피드 (장노출 시간 처리)
         if tag_name == "ExposureTime":
             val = float(value)
             if val >= 1.0:
+                # 1초 이상인 경우 (예: 30s) 정수/실수 구분하여 초 단위 표시
                 return f"{int(val)}s" if val.is_integer() else f"{val}s"
             else:
+                # 1초 미만인 경우 (예: 1/60s) 분수 형태로 변환
                 denom = int(round(1 / val))
                 return f"1/{denom}s"
 
@@ -106,12 +106,11 @@ def format_value(tag_name, value):
              val = value[0] if isinstance(value, (list, tuple)) else value
              return f"ISO {val}"
 
-        # 6. [추가됨] 노출 보정 (eV 단위 및 부호 표시)
+        # 6. 노출 보정
         if tag_name == "ExposureBiasValue":
             val = float(value)
             if val == 0:
                 return "0 eV"
-            # + 부호를 강제로 붙여서 표시 (예: +0.3 eV, -0.7 eV)
             return f"{val:+.1f} eV"
 
     except Exception:
@@ -119,9 +118,11 @@ def format_value(tag_name, value):
     return value
 
 # --- [함수] EXIF 정보 추출 ---
-def get_detailed_exif(image):
+def get_detailed_exif(image, file_size_bytes=0):
     exif_data = image.getexif()
-    if not exif_data: return None
+    if not exif_data: 
+        exif_data = {}
+    
     all_exif = {}
     for tag_id, value in exif_data.items():
         tag_name = TAGS.get(tag_id, tag_id)
@@ -136,13 +137,27 @@ def get_detailed_exif(image):
         except: pass
 
     result_dict = {}
+    
     date_val = all_exif.get("DateTimeOriginal", all_exif.get("DateTime"))
     if date_val: result_dict[TARGET_TAGS["DateTimeOriginal"]] = date_val
 
     for eng_key, kor_name in TARGET_TAGS.items():
         if eng_key in ["DateTime", "DateTimeOriginal"]: continue
+        
+        # [해상도] 실제 이미지 크기 (가로 x 세로)
+        if eng_key == "Resolution":
+            result_dict[kor_name] = f"{image.width} x {image.height}"
+            continue
+
+        # [파일 크기] KB 단위, 소수점 1자리
+        if eng_key == "FileSize":
+            kb_size = file_size_bytes / 1024
+            result_dict[kor_name] = f"{kb_size:.1f} KB"
+            continue
+
         if eng_key in all_exif:
             result_dict[kor_name] = format_value(eng_key, all_exif[eng_key])
+            
     return result_dict
 
 # --- [함수] 흰색 테두리(액자) 추가 ---
@@ -157,8 +172,7 @@ def main():
     st.set_page_config(page_title="EXIF 다중 뷰어", layout="wide")
     st.markdown("""<style>th, td { text-align: left !important; }</style>""", unsafe_allow_html=True)
 
-    # 타이틀 변경
-    st.title("📷 사진 정보 뷰어 (노출보정 추가)")
+    st.title("📷 사진 정보 뷰어")
 
     if 'history' not in st.session_state:
         st.session_state['history'] = []
@@ -181,7 +195,10 @@ def main():
             if not is_duplicate:
                 try:
                     original_image = Image.open(uploaded_file)
-                    exif_info = get_detailed_exif(original_image)
+                    
+                    file_size = uploaded_file.size 
+                    exif_info = get_detailed_exif(original_image, file_size)
+                    
                     bordered_image = add_white_border(original_image, border_width_mm=1.0)
 
                     st.session_state['history'].append({
@@ -202,13 +219,13 @@ def main():
                 st.image(item['image'], use_container_width=True)
             with col2:
                 if item['exif']:
+                    # 기본 DataFrame 테이블 사용 (로고 없음, 텍스트 출력)
                     df = pd.DataFrame(list(item['exif'].items()), columns=["항목", "정보"])
                     st.table(df)
                 else:
                     st.warning("정보 없음")
             st.divider()
 
-# --- [자동 실행 로직] ---
 if __name__ == "__main__":
     if st.runtime.exists():
         main()
